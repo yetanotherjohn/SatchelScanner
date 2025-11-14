@@ -1,20 +1,21 @@
+-- Revised Satchel Scanner (LFG/LFR passive icons + Open Finder button)
 -- Original concept by: Exzu / EU-Aszune
 -- Adjustments by: Reeknab / Shadow Council
 -- Fixed/cleaned by: (you) + ChatGPT
 ------------------------------------------------------------
 -- === CONFIG / STATE ===
 ------------------------------------------------------------
-local REFRESH_INTERVAL = 30
+local REFRESH_INTERVAL = 15
 local LAST_SATCHELS = {}
 local MainFrame
 local refreshTicker
 local running = true
 local dungeonIDs = {}
 SLASH_SATCHELSCANNER1 = "/satchel"
+
 ------------------------------------------------------------
 -- === HELPER FUNCTIONS ===
 ------------------------------------------------------------
-
 local function BuildDungeonList()
     wipe(dungeonIDs)
     for i = 1, GetNumRandomDungeons() do
@@ -38,7 +39,6 @@ end
 ------------------------------------------------------------
 -- === UI CONSTRUCTION ===
 ------------------------------------------------------------
-
 local function drawWindow()
     if MainFrame then
         MainFrame:Show()
@@ -49,7 +49,7 @@ local function drawWindow()
     -- Main Window
     --------------------------------------------------------
     MainFrame = CreateFrame("Frame", "SatchelScannerFrame", UIParent, "BasicFrameTemplateWithInset")
-    MainFrame:SetSize(360, 200) -- Half the previous height
+    MainFrame:SetSize(360, 200)
     MainFrame:SetPoint("CENTER")
     MainFrame:SetMovable(true)
     MainFrame:EnableMouse(true)
@@ -62,17 +62,28 @@ local function drawWindow()
     MainFrame.title:SetPoint("CENTER", MainFrame.TitleBg, "CENTER", 0, 0)
     MainFrame.title:SetText("Satchel Scanner")
 
-    -- === Refresh Button ===
+    --------------------------------------------------------
+    -- Refresh Button
+    --------------------------------------------------------
     local refresh = CreateFrame("Button", nil, MainFrame, "UIPanelButtonTemplate")
-    refresh:SetSize(60, 20) -- smaller button, fits title bar
-    refresh:SetPoint("RIGHT", MainFrame.TitleBg, "RIGHT", -6, 0)
+    refresh:SetSize(60, 20)
+    refresh:SetPoint("RIGHT", MainFrame.TitleBg, "RIGHT", 0, 0)
     refresh:SetText("Refresh")
-
-    -- We'll define RefreshDungeonList below and attach it at the end
     refresh:SetScript("OnClick", function()
         if RefreshDungeonList then
             RefreshDungeonList()
         end
+    end)
+
+    --------------------------------------------------------
+    -- NEW: Open Group Finder Button
+    --------------------------------------------------------
+    local openGF = CreateFrame("Button", nil, MainFrame, "UIPanelButtonTemplate")
+    openGF:SetSize(80, 20)
+    openGF:SetPoint("RIGHT", refresh, "LEFT", -195, 0)
+    openGF:SetText("Finder")
+    openGF:SetScript("OnClick", function()
+        PVEFrame_ToggleFrame("GroupFinderFrame")
     end)
 
     --------------------------------------------------------
@@ -97,27 +108,27 @@ local function drawWindow()
     end
 
     --------------------------------------------------------
-    -- Dungeon Row Factory
+    -- Dungeon / Raid Row Factory
     --------------------------------------------------------
-    local function CreateDungeonRow(parent, yOffset, name, id, roleStatus)
+    function CreateDungeonRow(parent, yOffset, name, id, roleStatus, isLFR)
         local row = CreateFrame("Frame", nil, parent)
-        row:SetSize(300, 24)
+        row:SetSize(330, 24)
         row:SetPoint("TOPLEFT", 0, -yOffset)
 
-        -- === Dungeon Name Text with truncation ===
+        -- === Name ===
         local text = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         text:SetPoint("LEFT", 5, 0)
-        text:SetWidth(180) -- Max width before truncating
+        text:SetWidth(180)
         text:SetJustifyH("LEFT")
         text:SetNonSpaceWrap(false)
         text:SetText(name)
 
-        -- === Role Icons ===
+        -- === Passive Role Icons ===
         local roles = {"TANK", "HEALER", "DAMAGER"}
         local x = 200
 
         for _, role in ipairs(roles) do
-            local icon = CreateFrame("Button", nil, row)
+            local icon = CreateFrame("Frame", nil, row)
             icon:SetSize(20, 20)
             icon:SetPoint("LEFT", x, 0)
             x = x + 26
@@ -128,53 +139,50 @@ local function drawWindow()
             tex:SetTexCoord(GetRoleTexCoords(role))
             icon.texture = tex
 
-            local hasSatchel = roleStatus[role]
-            if hasSatchel then
-                tex:SetVertexColor(0, 1, 0)
-
-                icon:SetScript("OnClick", function()
-                    -- Open the Group Finder if not visible
-                    if not PVEFrame or not PVEFrame:IsShown() then
-                        ToggleLFDParentFrame()
-                    end
-
-                    -- Select Random Dungeon category
-                    LFDParentFrame:SetAttribute("selectedTab", 1)
-                    LFDQueueFrame_SetType(id)
-                    LFDQueueFrame.type = id
-
-                    -- Delay role assignment to ensure Blizzard buttons exist
-                    C_Timer.After(0.1, function()
-                        -- Assign roles
-                        SetLFGRoles(role == "TANK", role == "HEALER", role == "DAMAGER")
-
-                        -- Safe updates
-                        if LFG_UpdateAvailableRoles then pcall(LFG_UpdateAvailableRoles) end
-                        if LFDQueueFrame_UpdateRoleButtons then pcall(LFDQueueFrame_UpdateRoleButtons) end
-                        if LFDQueueFrameSpecificList_Update then pcall(LFDQueueFrameSpecificList_Update) end
-
-                        -- Focus LFD tab visually
-                        if PVEFrameTab1 then PVEFrameTab1:Click() end
-                    end)
-                end)
-
-                icon:SetScript("OnEnter", function(self)
-                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                    GameTooltip:SetText(string.format("%s: Click to prepare queue as %s", name, role))
-                    GameTooltip:Show()
-                end)
-                icon:SetScript("OnLeave", GameTooltip_Hide)
-            else
+            if not roleStatus[role] then
                 tex:SetVertexColor(0.3, 0.3, 0.3)
-                icon:Disable()
             end
+        end
+
+        --------------------------------------------------------------------
+        -- === NEW: Lockout Icon (LFR only) ===
+        --------------------------------------------------------------------
+        if isLFR then
+            local encounters = GetLFGDungeonNumEncounters(id)
+            local killed = 0
+
+            if encounters and encounters > 0 then
+                for i = 1, encounters do
+                    local bossName, _, isKilled = GetLFGDungeonEncounterInfo(id, i)
+                    if isKilled then
+                        killed = killed + 1
+                    end
+                end
+            end
+
+            local iconPath
+            if killed == encounters then
+                iconPath = "Interface\\RaidFrame\\ReadyCheck-Ready"      -- green check
+            elseif killed > 0 then
+                iconPath = "Interface\\RaidFrame\\ReadyCheck-Waiting"    -- yellow ?
+            else
+                iconPath = "Interface\\RaidFrame\\ReadyCheck-NotReady"   -- red X
+            end
+
+            local lockIcon = CreateFrame("Frame", nil, row)
+            lockIcon:SetSize(20, 20)
+            lockIcon:SetPoint("LEFT", x + 4, 0)
+
+            local tex = lockIcon:CreateTexture(nil, "ARTWORK")
+            tex:SetAllPoints()
+            tex:SetTexture(iconPath)
         end
 
         return row
     end
 
     --------------------------------------------------------
-    -- Dungeon List Refresh Function
+    -- Refresh Function
     --------------------------------------------------------
     function RefreshDungeonList()
         for _, child in ipairs({scrollChild:GetChildren()}) do
@@ -183,18 +191,34 @@ local function drawWindow()
         end
 
         local yOffset = 0
-        local numDungeons = GetNumRandomDungeons()
-        for i = 1, numDungeons do
+
+        -- Random Dungeons
+        for i = 1, GetNumRandomDungeons() do
             local id, name = GetLFGRandomDungeonInfo(i)
             if id and name then
                 local eligible, forTank, forHealer, forDamage = GetLFGRoleShortageRewards(id, 1)
                 if eligible and (forTank or forHealer or forDamage) then
                     local roleStatus = {TANK = forTank, HEALER = forHealer, DAMAGER = forDamage}
-                    CreateDungeonRow(scrollChild, yOffset, name, id, roleStatus)
+                    CreateDungeonRow(scrollChild, yOffset, name, id, roleStatus, false)
                     yOffset = yOffset + 26
                 end
             end
         end
+
+        -- LFR
+        local numRF = GetNumRFDungeons and GetNumRFDungeons() or 0
+        for i = 1, numRF do
+            local dungeonID, name = GetRFDungeonInfo(i)
+            if dungeonID and name then
+                local eligible, forTank, forHealer, forDamage = GetLFGRoleShortageRewards(dungeonID, 1)
+                if eligible and (forTank or forHealer or forDamage) then
+                    local roleStatus = {TANK = forTank, HEALER = forHealer, DAMAGER = forDamage}
+                    CreateDungeonRow(scrollChild, yOffset, name, dungeonID, roleStatus, true)
+                    yOffset = yOffset + 26
+                end
+            end
+        end
+
         scrollChild:SetHeight(yOffset)
     end
 
@@ -205,15 +229,12 @@ local function drawWindow()
         refreshTicker = C_Timer.NewTicker(REFRESH_INTERVAL, RefreshDungeonList)
     end
 
-    -- Initial population
     RefreshDungeonList()
 end
-
 
 ------------------------------------------------------------
 -- === EVENT HANDLER ===
 ------------------------------------------------------------
-
 local SatchelScannerFrame = CreateFrame("Frame")
 SatchelScannerFrame:RegisterEvent("ADDON_LOADED")
 SatchelScannerFrame:SetScript("OnEvent", function(self, event, arg1)
@@ -224,13 +245,14 @@ SatchelScannerFrame:SetScript("OnEvent", function(self, event, arg1)
     end
 end)
 
+------------------------------------------------------------
+-- === SLASH COMMAND ===
+------------------------------------------------------------
 SlashCmdList["SATCHELSCANNER"] = function()
     if MainFrame and MainFrame:IsShown() then
         MainFrame:Hide()
     else
-        if not MainFrame then
-            drawWindow()
-        end
+        if not MainFrame then drawWindow() end
         MainFrame:Show()
     end
 end
